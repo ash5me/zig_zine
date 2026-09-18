@@ -1,0 +1,32 @@
+# Zig build outputs and caches
+.zig-cache/
+zig-out/
+zig-pkg/
+
+# Zig package-manager working/cache directories and downloaded packages
+zig-pkg/
+.zig-cache/p/
+.tmp-*/
+*.tar.gz
+*.zip
+
+# Common dependency directories
+packages/
+node_modules/
+
+# Native build artifacts
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+
+# Logs and crash dumps
+*.log
+*.dmp
+
+# Editor and operating-system junk
+.vscode/settings.json
+.DS_Store
+Thumbs.db
