@@ -1,4 +1,4 @@
-const cube_vertices: []const f32 = &[_]f32{
+pub const cube_vertices: []const f32 = &[_]f32{
     // Positions for a cube centered at origin with size 2 (from -1 to 1)
     -1.0, -1.0, -1.0, // 0
     1.0, -1.0, -1.0, // 1
@@ -10,7 +10,7 @@ const cube_vertices: []const f32 = &[_]f32{
     -1.0, 1.0, 1.0, // 7
 };
 
-const cube_indices: []const u32 = &[_]u32{
+pub const cube_indices: []const u32 = &[_]u32{
     0, 1, 2, 2, 3, 0, // front
     1, 5, 6, 6, 2, 1, // right
     5, 4, 7, 7, 6, 5, // back
