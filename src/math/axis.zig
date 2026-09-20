@@ -1,4 +1,5 @@
 const std = @import("std");
+const Vec3 = @import("vec.zig").Vec3;
 
 /// Mask for controlling per-axis behavior (movement locks, collision participation)
 pub const AxisMask = struct {
@@ -28,9 +29,4 @@ pub fn invertedVec3(mask: AxisMask) Vec3 {
 /// Elementwise multiplication of two Vec3 vectors
 pub fn mul(a: Vec3, b: Vec3) Vec3 {
     return a * b;
-}
-
-/// Elementwise subtraction of two Vec3 vectors
-pub fn sub_vec3(a: Vec3, b: Vec3) Vec3 {
-    return a - b;
 }

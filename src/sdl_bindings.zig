@@ -6,6 +6,14 @@ pub const VkInstance = ?*anyopaque;
 pub const VkSurfaceKHR = ?*anyopaque;
 pub const PFN_vkGetInstanceProcAddr = *const fn (VkInstance, [*:0]const u8) callconv(.c) vk.PfnVoidFunction;
 
+// SDL3 init/window flags. Reconstructed from memory of the SDL3 ABI, not
+// verified against the actual SDL3 headers (no SDL3 headers available in
+// this environment) — double check these values against SDL_init.h and
+// SDL_video.h before relying on them.
+pub const SDL_INIT_VIDEO: u32 = 0x00000020;
+pub const SDL_INIT_EVENTS: u32 = 0x00004000;
+pub const SDL_WINDOW_VULKAN: u64 = 0x0000000010000000;
+
 // SDL3 event type for quit
 pub const SDL_EVENT_QUIT: u32 = 0x100;
 
@@ -22,7 +30,7 @@ pub const SDL_Event = struct {
 
 pub extern fn SDL_Init(flags: u32) i32;
 pub extern fn SDL_Quit() void;
-pub extern fn SDL_CreateWindow(title: [*]const u8, width: i32, height: i32, flags: u64) *SDL_Window;
+pub extern fn SDL_CreateWindow(title: [*:0]const u8, width: i32, height: i32, flags: u64) ?*SDL_Window;
 pub extern fn SDL_DestroyWindow(window: *SDL_Window) void;
 pub extern fn SDL_PollEvent(event: *SDL_Event) i32;
 pub extern fn SDL_GetPerformanceCounter() u64;
@@ -41,15 +49,15 @@ pub extern fn SDL_GetWindowSizeInPixels(window: *SDL_Window, width: *c_int, heig
 pub const SDLContext = struct {
     window: *SDL_Window,
     allocator: std.mem.Allocator,
-    pub fn init(allocator: std.mem.Allocator, title: []const u8, width: i32, height: i32) !SDLContext {
-        if (SDL_Init(.init_video | .init_event) != 0) {
+
+    pub fn init(allocator: std.mem.Allocator, title: [*:0]const u8, width: i32, height: i32) !SDLContext {
+        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
             return error.SdlInitFailed;
         }
-        const window = SDL_CreateWindow(title, width, height, .window_vulkan);
-        if (window == null) {
+        const window = SDL_CreateWindow(title, width, height, SDL_WINDOW_VULKAN) orelse {
             SDL_Quit();
             return error.SdlCreateWindowFailed;
-        }
+        };
         return SDLContext{
             .window = window,
             .allocator = allocator,

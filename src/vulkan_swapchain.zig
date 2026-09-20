@@ -40,11 +40,20 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .acquireNextImageKHR = true,
     .queuePresentKHR = true,
     .deviceWaitIdle = true,
+    .createCommandPool = true,
+    .destroyCommandPool = true,
 });
 
 pub const QueueFamilyIndices = struct {
     graphics_family: u32,
     present_family: u32,
+};
+
+/// Result of acquiring a swapchain image: which image to render into, and
+/// whether the swapchain is stale and needs to be recreated before use.
+pub const AcquireResult = struct {
+    image_index: u32,
+    needs_recreation: bool,
 };
 
 /// Everything downstream code (the renderer) needs to draw a frame.
@@ -89,15 +98,15 @@ pub const VulkanSwapchain = struct {
         var vkd = try DeviceDispatch.load(device, vki.dispatch.vkGetDeviceProcAddr);
         errdefer vkd.destroyDevice(device, null);
 
-        const graphics_queue = vkd.getDeviceQueue(device, queue_families.graphics_family, 0);
-        const present_queue = vkd.getDeviceQueue(device, queue_families.present_family, 0);
-
-        // Create command pool for one-time commands and potentially for rendering
         const pool_info = vk.CommandPoolCreateInfo{
-            .flags = vk.COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = queue_families.graphics_family,
+            .flags = .{ .reset_command_buffer_bit = true },
+            .queue_family_index = queue_families.graphics_family,
         };
         const command_pool = try vkd.createCommandPool(device, &pool_info, null);
+        errdefer vkd.destroyCommandPool(device, command_pool, null);
+
+        const graphics_queue = vkd.getDeviceQueue(device, queue_families.graphics_family, 0);
+        const present_queue = vkd.getDeviceQueue(device, queue_families.present_family, 0);
 
         var swapchain_result = try createSwapchain(
             allocator,
@@ -177,9 +186,11 @@ pub const VulkanSwapchain = struct {
         self.vkd.cmdDrawIndexed(command_buffer, index_count, @intCast(transforms.len), 0, 0, 0);
     }
 
-    /// Acquires the next available swapchain image for rendering.
-    /// Returns the image index and whether the swapchain needs to be recreated.
-    pub fn acquire_next_image(self: *VulkanSwapchain, timeout: u64 = std.math.UINT64_MAX) !{u32: u32, bool: bool} {
+    /// Acquires the next available swapchain image for rendering. Caller
+    /// passes an explicit timeout (e.g. std.math.maxInt(u64) to wait
+    /// indefinitely) — Zig doesn't support default parameter values on
+    /// functions.
+    pub fn acquire_next_image(self: *VulkanSwapchain, timeout: u64) !AcquireResult {
         var image_index: u32 = undefined;
         const result = self.vkd.acquireNextImageKHR(
             self.device,
@@ -190,20 +201,20 @@ pub const VulkanSwapchain = struct {
             &image_index,
         );
         if (result == .error_out_of_date_khr) {
-            return .{ .u32 = 0, .bool = true };
+            return .{ .image_index = 0, .needs_recreation = true };
         }
-        if (result != .success && result != .suboptimal_khr) {
+        if (result != .success and result != .suboptimal_khr) {
             return error.SwapchainAcquisitionFailed;
         }
-        return .{ .u32 = image_index, .bool = false };
+        return .{ .image_index = image_index, .needs_recreation = false };
     }
 
     /// Presents the rendered image to the swapchain.
     /// Returns whether the swapchain needs to be recreated.
-    pub fn present(self: *VulkanSwapchain, image_index: u32, wait_semaphore: vk.Semaphore = .null_handle) !bool {
-        const wait_semaphores = [_]vk.Semaphore{ wait_semaphore };
-        const swapchains = [_]vk.SwapchainKHR{ self.swapchain };
-        const image_indices = [_]u32{ image_index };
+    pub fn present(self: *VulkanSwapchain, image_index: u32, wait_semaphore: vk.Semaphore) !bool {
+        const wait_semaphores = [_]vk.Semaphore{wait_semaphore};
+        const swapchains = [_]vk.SwapchainKHR{self.swapchain};
+        const image_indices = [_]u32{image_index};
         const present_info = vk.PresentInfoKHR{
             .wait_semaphore_count = if (wait_semaphore == .null_handle) 0 else 1,
             .p_wait_semaphores = if (wait_semaphore == .null_handle) null else &wait_semaphores,
@@ -211,7 +222,7 @@ pub const VulkanSwapchain = struct {
             .p_swapchains = &swapchains,
             .p_image_indices = &image_indices,
         };
-        const result = self.vkd.queuePresentKHR(self.present_queue, &present_info);
+        const result = try self.vkd.queuePresentKHR(self.present_queue, &present_info);
         if (result == .error_out_of_date_khr or result == .suboptimal_khr) {
             return true;
         }
@@ -222,10 +233,9 @@ pub const VulkanSwapchain = struct {
     }
 
     /// Recreates the swapchain and related resources when needed (e.g., after window resize).
-    /// Returns true if recreation was successful, false if swapchain is still unsuitable.
-    pub fn recreate_swapchain(self: *VulkanSwapchain, window: *c.SDL_Window) !bool {
+    pub fn recreate_swapchain(self: *VulkanSwapchain, window: *c.SDL_Window) !void {
         // Wait for GPU to finish using current resources before cleaning up
-        self.vkd.deviceWaitIdle(self.device);
+        try self.vkd.deviceWaitIdle(self.device);
 
         // Clean up old swapchain resources
         self.vkd.destroyCommandPool(self.device, self.command_pool, null);
@@ -245,7 +255,7 @@ pub const VulkanSwapchain = struct {
             self.queue_families,
             window,
         );
-        defer if (err != null) swapchain_result.deinitHandles(&self.vkd, self.device, self.allocator) else {};
+        errdefer swapchain_result.deinitHandles(&self.vkd, self.device, self.allocator);
 
         const image_views = try createImageViews(
             self.allocator,
@@ -255,22 +265,18 @@ pub const VulkanSwapchain = struct {
             swapchain_result.format,
         );
 
-        // Create command pool for new swapchain
         const pool_info = vk.CommandPoolCreateInfo{
-            .flags = vk.COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = self.queue_families.graphics_family,
+            .flags = .{ .reset_command_buffer_bit = true },
+            .queue_family_index = self.queue_families.graphics_family,
         };
         const command_pool = try self.vkd.createCommandPool(self.device, &pool_info, null);
 
-        // Update swapchain state
         self.swapchain = swapchain_result.swapchain;
         self.images = swapchain_result.images;
         self.format = swapchain_result.format;
         self.extent = swapchain_result.extent;
         self.image_views = image_views;
         self.command_pool = command_pool;
-
-        return true;
     }
 };
 
