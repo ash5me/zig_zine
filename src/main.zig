@@ -4,16 +4,19 @@ const physics = @import("physics_solver.zig");
 const sdl = @import("sdl_bindings.zig");
 const resources = @import("resources.zig");
 const build_options = @import("build_options");
+const vk = @import("vulkan");
 const VSC = @import("vulkan_swapchain.zig");
+const cube_data = @import("cube_data.zig");
 const vulkan_swapchain = if (build_options.enable_vulkan) VSC.VulkanSwapchain else struct {};
 const Matrix4x4 = VSC.Matrix4x4;
 
-fn findMemoryType(vki: *vk.InstanceWrapper, instance: vk.Instance, physical_device: vk.PhysicalDevice, typeFilter: u32, properties: vk.MemoryPropertyFlags) !u32 {
+fn findMemoryType(vki: *vk.InstanceWrapper, physical_device: vk.PhysicalDevice, typeFilter: u32, properties: vk.MemoryPropertyFlags) !u32 {
     const memory_properties = vki.getPhysicalDeviceMemoryProperties(physical_device, null);
     for (0..memory_properties.memoryTypes.len) |i| {
         const mem_type = memory_properties.memoryTypes[i];
         if ((typeFilter & (1 << @intCast(i))) != 0 and
-            (mem_type.propertyFlags & properties) == properties) {
+            (mem_type.propertyFlags & properties) == properties)
+        {
             return @intCast(i);
         }
     }
@@ -77,16 +80,16 @@ pub const Engine = struct {
             .pSubpasses = &subpass,
         };
         const render_pass = try vulkan.vkd.createRenderPass(vulkan.device, &render_pass_info, null);
-        defer if (errdefer) vulkan.vkd.destroyRenderPass(vulkan.device, render_pass, null);
+        errdefer vulkan.vkd.destroyRenderPass(vulkan.device, render_pass, null);
 
         // Create framebuffers
         const framebuffers = try allocator.alloc(vk.Framebuffer, vulkan.image_views.len);
-        defer if (errdefer) {
+        defer {
             for (framebuffers[0..vulkan.image_views.len]) |fb| {
                 vulkan.vkd.destroyFramebuffer(vulkan.device, fb, null);
             }
             allocator.free(framebuffers);
-        };
+        }
         for (vulkan.image_views, 0..) |view, i| {
             const framebuffer_info = vk.FramebufferCreateInfo{
                 .renderPass = render_pass,
@@ -176,26 +179,26 @@ pub fn main() !void {
 
     // Create vertex buffer
     const vertex_buffer_info = vk.BufferCreateInfo{
-        .size = @sizeOf(cube_vertices),
+        .size = @sizeOf(cube_data.cube_vertices),
         .usage = vk.BUFFER_USAGE_VERTEX_BUFFER_BIT,
         .sharingMode = vk.SHARING_MODE_EXCLUSIVE,
     };
     engine.vertex_buffer = try engine.vulkan.vkd.createBuffer(engine.vulkan.device, &vertex_buffer_info, null);
-    defer if (errdefer) engine.vulkan.vkd.destroyBuffer(engine.vulkan.device, engine.vertex_buffer, null);
+    errdefer engine.vulkan.vkd.destroyBuffer(engine.vulkan.device, engine.vertex_buffer, null);
 
     const memory_requirements = engine.vulkan.vkd.getBufferMemoryRequirements(engine.vulkan.device, engine.vertex_buffer);
     const memory_alloc_info = vk.MemoryAllocateInfo{
         .allocationSize = memory_requirements.size,
-        .memoryTypeIndex = try findMemoryType(&engine.vulkan.vki, engine.vulkan.instance, memory_requirements.memoryTypeBits, vk.MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.MEMORY_PROPERTY_HOST_COHERENT_BIT),
+        .memoryTypeIndex = try findMemoryType(&engine.vulkan.vki, memory_requirements.memoryTypeBits, vk.MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     engine.vertex_buffer_memory = try engine.vulkan.vkd.allocateMemory(engine.vulkan.device, &memory_alloc_info, null);
-    defer if (errdefer) engine.vulkan.vkd.freeMemory(engine.vulkan.device, engine.vertex_buffer_memory, null);
+    errdefer engine.vulkan.vkd.freeMemory(engine.vulkan.device, engine.vertex_buffer_memory, null);
     engine.vulkan.vkd.bindBufferMemory(engine.vulkan.device, engine.vertex_buffer, engine.vertex_buffer_memory, 0);
 
     // Map and copy vertex data
     var mapped_data: [*]u8 = undefined;
-    engine.vulkan.vkd.mapMemory(engine.vulkan.device, engine.vertex_buffer_memory, 0, @sizeOf(cube_vertices), 0, @ptrCast(&mapped_data));
-    @memcpy(mapped_data[0..@sizeOf(cube_vertices)], @ptrCast(&cube_vertices));
+    engine.vulkan.vkd.mapMemory(engine.vulkan.device, engine.vertex_buffer_memory, 0, @sizeOf(cube_data.cube_vertices), 0, @ptrCast(&mapped_data));
+    @memcpy(mapped_data[0..@sizeOf(cube_data.cube_vertices)], @ptrCast(&cube_data.cube_vertices));
     engine.vulkan.vkd.unmapMemory(engine.vulkan.device, engine.vertex_buffer_memory);
 
     // Create index buffer
@@ -205,7 +208,7 @@ pub fn main() !void {
         .sharingMode = vk.SHARING_MODE_EXCLUSIVE,
     };
     engine.index_buffer = try engine.vulkan.vkd.createBuffer(engine.vulkan.device, &index_buffer_info, null);
-    defer if (errdefer) engine.vulkan.vkd.destroyBuffer(engine.vulkan.device, engine.index_buffer, null);
+    errdefer engine.vulkan.vkd.destroyBuffer(engine.vulkan.device, engine.index_buffer, null);
 
     const index_memory_requirements = engine.vulkan.vkd.getBufferMemoryRequirements(engine.vulkan.device, engine.index_buffer);
     const index_memory_alloc_info = vk.MemoryAllocateInfo{
@@ -213,7 +216,7 @@ pub fn main() !void {
         .memoryTypeIndex = try findMemoryType(&engine.vulkan.vki, engine.vulkan.instance, index_memory_requirements.memoryTypeBits, vk.MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     engine.index_buffer_memory = try engine.vulkan.vkd.allocateMemory(engine.vulkan.device, &index_memory_alloc_info, null);
-    defer if (errdefer) engine.vulkan.vkd.freeMemory(engine.vulkan.device, engine.index_buffer_memory, null);
+    errdefer engine.vulkan.vkd.freeMemory(engine.vulkan.device, engine.index_buffer_memory, null);
     engine.vulkan.vkd.bindBufferMemory(engine.vulkan.device, engine.index_buffer, engine.index_buffer_memory, 0);
 
     // Map and copy index data
@@ -229,7 +232,7 @@ pub fn main() !void {
         .sharingMode = vk.SHARING_MODE_EXCLUSIVE,
     };
     engine.instance_buffer = try engine.vulkan.vkd.createBuffer(engine.vulkan.device, &instance_buffer_info, null);
-    defer if (errdefer) engine.vulkan.vkd.destroyBuffer(engine.vulkan.device, engine.instance_buffer, null);
+    errdefer engine.vulkan.vkd.destroyBuffer(engine.vulkan.device, engine.instance_buffer, null);
 
     const instance_memory_requirements = engine.vulkan.vkd.getBufferMemoryRequirements(engine.vulkan.device, engine.instance_buffer);
     const instance_memory_alloc_info = vk.MemoryAllocateInfo{
@@ -237,7 +240,7 @@ pub fn main() !void {
         .memoryTypeIndex = try findMemoryType(&engine.vulkan.vki, engine.vulkan.instance, instance_memory_requirements.memoryTypeBits, vk.MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     engine.instance_buffer_memory = try engine.vulkan.vkd.allocateMemory(engine.vulkan.device, &instance_memory_alloc_info, null);
-    defer if (errdefer) engine.vulkan.vkd.freeMemory(engine.vulkan.device, engine.instance_buffer_memory, null);
+    errdefer engine.vulkan.vkd.freeMemory(engine.vulkan.device, engine.instance_buffer_memory, null);
     engine.vulkan.vkd.bindBufferMemory(engine.vulkan.device, engine.instance_buffer, engine.instance_buffer_memory, 0);
 
     // Map instance buffer for CPU access
@@ -292,7 +295,7 @@ pub fn main() !void {
             // TODO: Handle swapchain recreation
             continue;
         }
-        if (acquire_result != vk.SUCCESS && acquire_result != vk.SUBOPTIMAL_KHR) {
+        if (acquire_result != vk.SUCCESS and acquire_result != vk.SUBOPTIMAL_KHR) {
             return error.AcquireNextImageFailed;
         }
         image_index = @intCast(acquired_image_index);
@@ -338,14 +341,14 @@ pub fn main() !void {
 
         // Bind pipeline and draw
         engine.vulkan.vkd.cmdBindPipeline(command_buffer, vk.PIPELINE_BIND_POINT_GRAPHICS, engine.pipeline);
-        
-        const vertex_buffers = [_]vk.Buffer{ engine.vertex_buffer };
-        const vertex_offsets = [_]vk.DeviceSize{ 0 };
+
+        const vertex_buffers = [_]vk.Buffer{engine.vertex_buffer};
+        const vertex_offsets = [_]vk.DeviceSize{0};
         engine.vulkan.vkd.cmdBindVertexBuffers(command_buffer, 0, vertex_buffers[0..], vertex_offsets[0..]);
         engine.vulkan.vkd.cmdBindIndexBuffer(command_buffer, engine.index_buffer, 0, vk.INDEX_TYPE_UINT32);
-        
-        const instance_buffers = [_]vk.Buffer{ engine.instance_buffer };
-        const instance_offsets = [_]vk.DeviceSize{ 0 };
+
+        const instance_buffers = [_]vk.Buffer{engine.instance_buffer};
+        const instance_offsets = [_]vk.DeviceSize{0};
         engine.vulkan.vkd.cmdBindVertexBuffers(command_buffer, 1, instance_buffers[0..], instance_offsets[0..]);
 
         engine.vulkan.vkd.cmdDrawIndexed(command_buffer, 36, engine.entities.count, 0, 0, 0); // 36 indices for cube
@@ -372,8 +375,8 @@ pub fn main() !void {
         engine.vulkan.vkd.queueSubmit(engine.vulkan.graphics_queue, 1, &submit_info, .null_handle);
 
         // Present
-        const swapchains = [_]vk.SwapchainKHR{ engine.vulkan.swapchain };
-        const image_indices = [_]u32{ image_index };
+        const swapchains = [_]vk.SwapchainKHR{engine.vulkan.swapchain};
+        const image_indices = [_]u32{image_index};
         const present_info = vk.PresentInfoKHR{
             .waitSemaphoreCount = signal_semaphores.len,
             .pWaitSemaphores = signal_semaphores.ptr,
@@ -398,7 +401,7 @@ fn createGraphicsPipeline(vkd: *vk.DeviceWrapper, device: vk.Device, render_pass
     // Simple pipeline creation - in a real implementation this would load shaders
     // For now, we'll create a minimal pipeline that will likely fail but allows compilation
     // TODO: Implement proper shader loading and pipeline creation
-    
+
     // Vertex input state
     const vertex_input_info = vk.PipelineVertexInputStateCreateInfo{
         .vertexBindingDescriptionCount = 0,
@@ -508,15 +511,15 @@ fn createGraphicsPipeline(vkd: *vk.DeviceWrapper, device: vk.Device, render_pass
     return pipeline;
 }
 
-fn updateInstanceBuffer(vkd: *vk.DeviceWrapper, device: vk.Device, command_pool: vk.CommandPool, graphics_queue: vk.Queue, mapped_instance_data: [*]Matrix4x4, entities: *movement.Registry) !void {
+fn updateInstanceBuffer(_vkd: *vk.DeviceWrapper, _device: vk.Device, _command_pool: vk.CommandPool, _graphics_queue: vk.Queue, mapped_instance_data: [*]Matrix4x4, entities: *movement.Registry) !void {
     // Update instance buffer with entity transforms
     // This is a simplified implementation - in reality we would:
     // 1. Get transforms from the ECS
     // 2. Update the mapped instance data
     // 3. Ensure proper synchronization
-    
+
     // For now, we'll just zero out the data as a placeholder
-    @memset(mapped_instance_data, 0, entities.capacity * @sizeOf(Matrix4x4));
+    std.mem.set(mapped_instance_data, 0, entities.capacity * @sizeOf(Matrix4x4));
 }
 
 test "engine initializes and reports running" {

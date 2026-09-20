@@ -179,7 +179,7 @@ pub const VulkanSwapchain = struct {
 
     /// Acquires the next available swapchain image for rendering.
     /// Returns the image index and whether the swapchain needs to be recreated.
-    pub fn acquire_next_image(self: *VulkanSwapchain, timeout: u64 = UINT64_MAX) !struct { u32, bool } {
+    pub fn acquire_next_image(self: *VulkanSwapchain, timeout: u64 = std.math.UINT64_MAX) !{u32: u32, bool: bool} {
         var image_index: u32 = undefined;
         const result = self.vkd.acquireNextImageKHR(
             self.device,

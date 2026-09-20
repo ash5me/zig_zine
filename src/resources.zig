@@ -22,7 +22,7 @@ pub const Texture = struct {
 
 /// Cache for textures with reference counting and automatic cleanup.
 pub const TextureCache = struct {
-    allocator: std::mem.Allocator,
+    allocator: std.em.Allocator,
     vulkan: *VulkanSwapchain,
     textures: std.ArrayList(Texture),
     key_to_index: std.StringHashMap(usize),
@@ -32,7 +32,7 @@ pub const TextureCache = struct {
         const sampler = try createSampler(&vulkan.vkd, vulkan.device);
         defer |err| {
             vulkan.vkd.destroySampler(vulkan.device, sampler, null);
-        };
+        }
         return TextureCache{
             .allocator = allocator,
             .vulkan = vulkan,
