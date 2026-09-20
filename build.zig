@@ -11,30 +11,43 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "enable_vulkan", enable_vulkan);
 
+    // PNG/image decoding: zig-gamedev/zstbi (Zig wrapper over stb_image).
+    // Its "root" module compiles the stb C sources itself (the package only
+    // exposes a "zstbi-tests" artifact, no linkable library), and C code
+    // needs libc, hence link_libc below.
+    const zstbi = b.dependency("zstbi", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "zig_zine",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "zstbi", .module = zstbi.module("root") },
+            },
         }),
     });
     exe.root_module.addOptions("build_options", options);
 
-    const sdl = b.dependency("sdl", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const vulkan_headers = b.dependency("vulkan_headers", .{});
-    const vulkan = b.dependency("vulkan", .{
-        .registry = vulkan_headers.path("registry/vk.xml"),
-    });
-    exe.root_module.addImport("vulkan", vulkan.module("vulkan-zig"));
-
-    const ecs = b.dependency("entt", .{}).module("zig-ecs");
-
+    // SDL3 + Vulkan are only pulled in for -Dvulkan=true (window + Vulkan
+    // device/swapchain, see src/platform.zig). The default build is headless:
+    // no window, GPU, or system-library requirements.
     if (enable_vulkan) {
+        const sdl = b.dependency("sdl", .{
+            .target = target,
+            .optimize = optimize,
+        });
+
+        const vulkan_headers = b.dependency("vulkan_headers", .{});
+        const vulkan = b.dependency("vulkan", .{
+            .registry = vulkan_headers.path("registry/vk.xml"),
+        });
+        exe.root_module.addImport("vulkan", vulkan.module("vulkan-zig"));
         exe.root_module.linkLibrary(sdl.artifact("SDL3"));
 
         switch (target.result.os.tag) {
@@ -62,8 +75,6 @@ pub fn build(b: *std.Build) void {
             },
             else => {},
         }
-    } else {
-        exe.root_module.linkLibrary(sdl.artifact("SDL3"));
     }
     b.installArtifact(exe);
 
@@ -72,6 +83,8 @@ pub fn build(b: *std.Build) void {
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
     run_step.dependOn(&run_cmd.step);
+
+    const ecs = b.dependency("entt", .{}).module("zig-ecs");
 
     const tests = b.addTest(.{ .root_module = exe.root_module });
     const ecs_stress_tests = b.addTest(.{

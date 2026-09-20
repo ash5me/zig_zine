@@ -48,6 +48,10 @@
             .url = "git+https://github.com/prime31/zig-ecs.git#d3a429a157a0502ff4b3b2fa9389251bffca269e",
             .hash = "entt-1.0.0-qJPtbEjuAgBGugkES3DQsThMbIilGXJhTqgcpp121VDK",
         },
+        .zstbi = .{
+            .url = "git+https://github.com/zig-gamedev/zstbi#3813f5f113b26f644cfa01a30155cc76b3526e91",
+            .hash = "zstbi-0.11.0-dev-L0Ea_3GWBwAh7m54XX055vwLKPTPij5hyqyeq92MXPE2",
+        },
     },
     .paths = .{
         "build.zig",
