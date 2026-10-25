@@ -1,52 +1,50 @@
 # Vulkan Validation Layers
 
-This document describes the Debug-only Vulkan validation setup for the
-`vulkan-zig` renderer.
+**Status:** Planned, not implemented. `build.zig` does not define `enable_validation`, and `vulkan_swapchain.zig` creates its instance without the validation layer or a debug messenger. This document is the design for adding them.
 
 ## Build option
 
-Expose a compile-time flag from `build.zig`:
+`build.zig` already creates an options module with `enable_vulkan`. Add a second flag next to it, derived from the standard optimize setting:
 
 ```zig
-const mode = b.option(
-    std.builtin.OptimizeMode,
-    "mode",
-    "Build mode",
-) orelse .Debug;
+const optimize = b.standardOptimizeOption(.{});
 
 const options = b.addOptions();
-options.addOption(bool, "enable_validation", mode == .Debug);
-
-const exe = b.addExecutable(.{
-    .name = "zig_zine",
-    .root_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = mode,
-    }),
-});
-exe.root_module.addOptions("build_options", options);
+options.addOption(bool, "enable_vulkan", enable_vulkan);
+options.addOption(bool, "enable_validation", optimize == .Debug);
 ```
 
-Build Debug or Release explicitly:
+Use the standard `-Doptimize` flag. `build.zig` already passes it to the executable and test artifacts. This replaces an earlier proposal for a custom `-Dmode` option.
+
+Build:
 
 ```sh
-zig build -Dmode=Debug
-zig build -Dmode=ReleaseFast
+zig build                          # Debug by default: validation on
+zig build -Doptimize=ReleaseFast   # validation off
 ```
 
-`enable_validation` is true only for Debug builds.
+Validation only takes effect when `-Dvulkan=true` is set, because the headless build creates no Vulkan instance.
 
 ## Vulkan dispatch entries
 
-The instance dispatch wrapper must load the debug messenger functions:
+Extend `InstanceDispatch` in `vulkan_swapchain.zig`:
 
 ```zig
 const InstanceDispatch = vk.InstanceWrapper(.{
     .destroyInstance = true,
     .createDebugUtilsMessengerEXT = true,
     .destroyDebugUtilsMessengerEXT = true,
-    // Other instance functions used by the renderer...
+    // ...existing entries
+});
+```
+
+Add layer enumeration to `BaseDispatch`, so the availability check described under "Runtime requirement" can run before instance creation:
+
+```zig
+const BaseDispatch = vk.BaseWrapper(.{
+    .createInstance = true,
+    .enumerateInstanceExtensionProperties = true,
+    .enumerateInstanceLayerProperties = true,
 });
 ```
 
@@ -92,28 +90,28 @@ fn debugMessengerCreateInfo() vk.DebugUtilsMessengerCreateInfoEXT {
 }
 ```
 
+`verbose` messages are very noisy. Keep them enabled only while debugging a specific problem.
+
 ## Instance creation
 
-When validation is enabled, request both the validation layer and the
-`VK_EXT_debug_utils` instance extension:
+This uses the unmanaged `std.ArrayList`, the same form as `physics_solver.zig` and `resources.zig`. `vulkan_swapchain.zig` currently uses the managed form, which is one of the known compile issues listed in the README.
 
 ```zig
 const validation_layer_name: [*:0]const u8 =
     "VK_LAYER_KHRONOS_validation";
 
-var extension_names =
-    try std.ArrayList([*:0]const u8).initCapacity(allocator, ext_count + 1);
-defer extension_names.deinit();
+var extension_names: std.ArrayList([*:0]const u8) = .empty;
+defer extension_names.deinit(allocator);
 
 for (0..ext_count) |i| {
-    try extension_names.append(sdl_extensions[i]);
+    try extension_names.append(allocator, sdl_extensions[i]);
 }
 
 var debug_create_info: ?vk.DebugUtilsMessengerCreateInfoEXT = null;
 const validation_layers = [_][*:0]const u8{validation_layer_name};
 
 if (build_options.enable_validation) {
-    try extension_names.append(vk.extensions.ext_debug_utils.name);
+    try extension_names.append(allocator, vk.extensions.ext_debug_utils.name);
     debug_create_info = debugMessengerCreateInfo();
 }
 
@@ -133,31 +131,30 @@ const instance = try vkb.createInstance(&.{
 }, null);
 ```
 
-Passing the debug messenger create info through `p_next` allows validation
-messages to be reported during instance creation itself.
+Passing the debug messenger create info through `p_next` lets validation messages be reported during instance creation itself.
 
 ## Messenger lifecycle
 
-After loading the instance dispatch table, create the messenger in Debug mode:
+After loading the instance dispatch table, create the messenger in Debug mode. Keep the create info in a local variable so its address is valid for the call:
 
 ```zig
-const debug_messenger = if (build_options.enable_validation)
-    try vki.createDebugUtilsMessengerEXT(
-        instance,
-        &debugMessengerCreateInfo(),
-        null,
-    )
-else
-    null;
+var debug_messenger: ?vk.DebugUtilsMessengerEXT = null;
+if (build_options.enable_validation) {
+    var info = debugMessengerCreateInfo();
+    debug_messenger = try vki.createDebugUtilsMessengerEXT(instance, &info, null);
+}
+errdefer if (debug_messenger) |messenger| {
+    vki.destroyDebugUtilsMessengerEXT(instance, messenger, null);
+};
 ```
 
-Store the result as an optional field:
+Store the result as an optional field on `VulkanSwapchain`:
 
 ```zig
 debug_messenger: ?vk.DebugUtilsMessengerEXT,
 ```
 
-Destroy it before destroying the Vulkan instance:
+Destroy it before destroying the Vulkan instance, in `VulkanSwapchain.deinit`:
 
 ```zig
 if (self.debug_messenger) |messenger| {
@@ -171,8 +168,7 @@ if (self.debug_messenger) |messenger| {
 self.vki.destroyInstance(self.instance, null);
 ```
 
-Use `errdefer` after instance creation so partially initialized Vulkan state
-also destroys the messenger and instance correctly.
+The `errdefer` placed after instance creation ensures that partially initialized state (for example, a failed surface creation) also destroys the messenger and instance.
 
 ## Runtime requirement
 
@@ -182,6 +178,4 @@ The Vulkan SDK must provide the layer named:
 VK_LAYER_KHRONOS_validation
 ```
 
-If the layer is not installed, Debug instance creation fails. A production
-renderer should enumerate available instance layers first and enable validation
-only when the requested layer is present.
+If the layer is not installed, Debug instance creation fails. A production renderer should enumerate available instance layers first and enable validation only when the requested layer is present. The `enumerateInstanceLayerProperties` entry added to `BaseDispatch` above is what makes that check possible.
